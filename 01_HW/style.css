@@ -33,3 +33,36 @@ img {
     height: auto;
     border-radius: 8px;
 }
+
+.blue-header {
+    background-color: #007BFF;
+    color: white;
+}
+
+.highlight-row {
+    background-color: #007BFF;
+    color: white;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.selected-row>th,
+.selected-row>td {
+    background-color: #ADD8E6;
+    color: darkblue;
+    font-weight: bold;
+    font-size: 1.2em;
+}
+
+.song-link {
+    color: darkblue;
+    font-weight: bold;
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+
+.song-link:hover {
+    color: #007BFF;
+    text-decoration: underline;
+    font-size: 1.1em;
+}
