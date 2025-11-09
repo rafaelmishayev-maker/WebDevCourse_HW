@@ -1,0 +1,65 @@
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f9f9f9;
+    margin: 40px;
+    /* Space between page edge and content */
+}
+
+h1 {
+    text-align: center;
+    /* Center the title horizontally */
+    color: #333;
+}
+
+table {
+    border-collapse: collapse;
+    /* Remove double borders between cells */
+    width: 60%;
+    margin: 0 auto;
+    background-color: white;
+}
+
+/* Header row (Send a Message) */
+th {
+    background-color: #007BFF;
+    color: white;
+    font-size: 20px;
+    padding: 10px;
+}
+
+/* Table data cells */
+td {
+    border: 1px solid #ddd;
+    /* Light gray border around cells */
+    padding: 8px;
+}
+
+/* Input and textarea fields styling */
+input[type="text"],
+input[type="email"],
+textarea {
+    width: 98%;
+    padding: 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+/* Submit button styling */
+input[type="submit"] {
+    background-color: #007BFF;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+/* Button hover effect */
+input[type="submit"]:hover {
+    background-color: #0056b3;
+}
+
+/* Used for the bottom row to center the button */
+.center {
+    text-align: center;
+}
