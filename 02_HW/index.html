@@ -14,16 +14,26 @@
 
     <div class="container mt-4">
 
-        <!-- Calculator row -->
+        <!-- ==========================
+             Calculator Layout
+             =========================== -->
         <div class="row g-3 align-items-center">
 
-            <!-- Number 1 input -->
-            <div class="col-12 col-sm-6 col-md-3 col-lg-2">
+            <!-- Number 1 Input -->
+            <div class="col-12 col-md-6 col-lg-3">
                 <input id="txt1" type="text" class="form-control" placeholder="Number 1">
             </div>
 
+            <!-- Number 2 Input -->
+            <div class="col-12 col-md-6 col-lg-3">
+                <input id="txt2" type="text" class="form-control" placeholder="Number 2">
+            </div>
+
+            <!-- Break line ONLY on tablet screens -->
+            <div class="w-100 d-none d-md-block d-lg-none"></div>
+
             <!-- Operator dropdown -->
-            <div class="col-12 col-sm-6 col-md-2 col-lg-2">
+            <div class="col-12 col-md-6 col-lg-3">
                 <select id="op" class="form-select">
                     <option value="+">+</option>
                     <option value="-">-</option>
@@ -32,26 +42,17 @@
                 </select>
             </div>
 
-            <!-- Number 2 input -->
-            <div class="col-12 col-sm-6 col-md-3 col-lg-2">
-                <input id="txt2" type="text" class="form-control" placeholder="Number 2">
-            </div>
-
-            <!-- "=" button -->
-            <div class="col-6 col-sm-3 col-md-2 col-lg-1">
+            <!-- "=" Button -->
+            <div class="col-6 col-md-3 col-lg-1">
                 <button id="btnCalc" class="btn btn-primary w-100">=</button>
             </div>
-
-            <!-- Inline result (top right) -->
-            <div class="col-6 col-sm-3 col-md-2 col-lg-2">
-                <h3 id="lblRes" class="text-success text-center"></h3>
-            </div>
-
         </div>
 
         <hr class="my-4">
 
-        <!-- Result panel -->
+        <!-- ==========================
+             Result Box
+             =========================== -->
         <div class="row mb-4">
             <div class="col-12 col-md-6">
                 <label class="form-label">Result:</label>
@@ -63,7 +64,9 @@
 
         <hr class="my-4">
 
-        <!-- Log area -->
+        <!-- ==========================
+             Log Section
+             =========================== -->
         <div class="row mb-4">
             <div class="col-12">
                 <label class="form-label">Log:</label>
@@ -73,7 +76,7 @@
 
         <hr>
 
-        <!-- Demo buttons -->
+        <!-- Demo Buttons -->
         <button onclick="demoNative()" class="btn btn-secondary me-2">Native Types</button>
         <button id="btn2" class="btn btn-dark">Register Click From Code</button>
 

@@ -1,23 +1,23 @@
-// Wait for the DOM to be fully loaded before accessing elements
+// Wait until the DOM is fully loaded
 document.addEventListener("DOMContentLoaded", () => {
     pageLoaded();
 });
 
-let txt1;       // to the first number input field
-let txt2;       // to the second number input field
-let btnCalc;    // to the "=" button that triggers the calculation
-let lblRes;     // to the top-right result display (green text)
-let lblRes2;    // to the large result panel below
-let selectOp;   // operator dropdown (+, -, *, /)
+// Input fields, buttons, result box, operator dropdown
+let txt1;
+let txt2;
+let btnCalc;
+let lblRes2;     // Main result box
+let selectOp;
 
 /**
- * Validate a single input element as numeric (not empty, not NaN).
- * Adds Bootstrap classes is-valid / is-invalid accordingly.
+ * Validate an input field to ensure it contains a numeric value.
+ * Adds Bootstrap validation classes is-valid / is-invalid.
  */
 function validateInput(inputElement) {
     const value = inputElement.value;
 
-    // If empty or not a number → treat as invalid
+    // If empty or not a number → mark as invalid
     if (value.trim() === "" || isNaN(value)) {
         inputElement.classList.remove("is-valid");
         inputElement.classList.add("is-invalid");
@@ -30,14 +30,13 @@ function validateInput(inputElement) {
 }
 
 /**
- * Initialize references to DOM elements and register event listeners.
+ * Initialize DOM references and register event listeners.
  */
 function pageLoaded() {
     txt1 = document.getElementById('txt1');
     txt2 = document.getElementById('txt2');
     btnCalc = document.getElementById('btnCalc');
-    lblRes = document.getElementById('lblRes');
-    lblRes2 = document.getElementById('lblRes2'); // Result box below main row
+    lblRes2 = document.getElementById('lblRes2');  // Only result output used
     selectOp = document.getElementById('op');
 
     btnCalc.addEventListener('click', () => {
@@ -46,17 +45,14 @@ function pageLoaded() {
 }
 
 /**
- * Perform the calculation according to the selected operator and
- * update both result labels + log.
+ * Perform the arithmetic operation and update the result + log.
  */
 function calculate() {
-    // Validate both input fields before performing calculation
     const valid1 = validateInput(txt1);
     const valid2 = validateInput(txt2);
 
-    // If one of the inputs is invalid → clear results and stop
+    // Stop calculation if one of the inputs is invalid
     if (!valid1 || !valid2) {
-        lblRes.innerText = "";
         lblRes2.innerText = "";
         return;
     }
@@ -75,30 +71,19 @@ function calculate() {
         default: res = "NaN";
     }
 
-    // Update on-screen results
-    lblRes.innerText = res;
+    // Update ONLY the result box
     lblRes2.innerText = res;
 
-    // Append operation summary to log
+    // Append to log
     print(`${num1} ${op} ${num2} = ${res}`, true);
 }
 
-// ---------------------------------------------
-// Button 2 click example
-// ---------------------------------------------
-const btn2 = document.getElementById("btn2");
-btn2.addEventListener("click", () => {
-    print("btn2 clicked :" + btn2.id + "|" + btn2.innerText, true);
-});
-
 /**
- * Write a message to the textarea log.
- * If append = true → add a new line at the bottom.
- * If append = false → replace the existing content.
+ * Writes a message to the log textarea.
+ * append = true → adds a new line at the bottom.
  */
 function print(msg, append = false) {
 
-    // Get TextArea element reference
     const ta = document.getElementById("output");
 
     if (!ta) {
@@ -106,57 +91,57 @@ function print(msg, append = false) {
         return;
     }
 
-    // Write to log
     if (append) {
-        // Append at the end with a new line
+        // Append to the end
         ta.value += (ta.value ? "\n" : "") + msg;
     } else {
-        // Replace entire content
+        // Replace all content
         ta.value = msg;
     }
 }
 
-// =============================================
-// STEP 1: JS NATIVE TYPES, USEFUL TYPES & OPERATIONS
-// =============================================
+// ----------------------------------------------------
+// Demo Section (Native JS Types)
+// ----------------------------------------------------
+
 function demoNative() {
     let out = "=== STEP 1: NATIVE TYPES ===\n";
 
-    // String
+    // String example
     const s = "Hello World";
     out += "\n[String] s = " + s;
     out += "\nLength: " + s.length;
     out += "\nUpper: " + s.toUpperCase();
 
-    // Number
+    // Number example
     const n = 42;
     out += "\n\n[Number] n = " + n;
 
-    // Boolean
+    // Boolean example
     const b = true;
     out += "\n\n[Boolean] b = " + b;
 
-    // Date
+    // Date example
     const d = new Date();
     out += "\n\n[Date] now = " + d.toISOString();
 
-    // Array
+    // Array example
     const arr = [1, 2, 3, 4];
     out += "\n\n[Array] arr = [" + arr.join(", ") + "]";
     out += "\nPush 5 → " + (arr.push(5), arr.join(", "));
     out += "\nMap x2 → " + arr.map(x => x * 2).join(", ");
 
-    // Functions as variables
+    // Function as variable
     const add = function (a, b) { return a + b; };
     out += "\n\n[Function as variable] add(3,4) = " + add(3, 4);
 
-    // Callback
+    // Callback example
     function calc(a, b, fn) {
         return fn(a, b);
     }
     const result = calc(10, 20, (x, y) => x + y);
     out += "\n[Callback] calc(10,20, x+y ) = " + result;
 
-    // Print to log (replace content)
+    // Print demo output
     print(out);
 }
