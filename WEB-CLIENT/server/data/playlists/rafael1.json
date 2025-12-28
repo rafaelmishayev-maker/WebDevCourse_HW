@@ -1,0 +1,29 @@
+[
+  {
+    "id": "pl_1766934338433_496d4df7d29238",
+    "name": "A",
+    "items": [
+      {
+        "type": "youtube",
+        "videoId": "K8TzFUz6VA0",
+        "title": "אושר כהן - אין כבוד (Prod. by Avi Gutman)",
+        "thumbnailUrl": "https://i.ytimg.com/vi/K8TzFUz6VA0/hqdefault.jpg",
+        "duration": "—",
+        "views": "—",
+        "rating": 0,
+        "addedAt": "2025-12-28T15:05:38.453Z"
+      },
+      {
+        "type": "youtube",
+        "videoId": "4GEPbc8Qeac",
+        "title": "אושר כהן - באמת של האמת (Prod. By Jo Cohen)",
+        "thumbnailUrl": "https://i.ytimg.com/vi/4GEPbc8Qeac/hqdefault.jpg",
+        "duration": "—",
+        "views": "—",
+        "rating": 0,
+        "addedAt": "2025-12-28T15:06:48.954Z"
+      }
+    ],
+    "createdAt": "2025-12-28T15:05:38.433Z"
+  }
+]

@@ -1,0 +1,81 @@
+/* Basic shared styling for the whole project */
+body {
+    background-color: #f8f9fa;
+}
+
+.page-title {
+    margin: 24px 0 12px;
+}
+
+/* Clamp titles to 2 lines */
+.video-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+}
+
+
+/* Card checkmark overlay */
+.card-check {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(25, 135, 84, 0.95);
+    /* bootstrap success-ish */
+    color: #fff;
+    border-radius: 999px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    z-index: 2;
+}
+
+.video-card {
+    position: relative;
+}
+
+/* Playlists layout: 2 main areas */
+.playlist-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 16px;
+    padding: 0 12px 12px;
+}
+
+.playlist-sidebar {
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+    height: calc(100vh - 120px);
+    overflow: auto;
+}
+
+.playlist-main {
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+    min-height: calc(100vh - 120px);
+}
+
+/* Responsive: sidebar moves on top */
+@media (max-width: 992px) {
+    .playlist-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .playlist-sidebar {
+        height: auto;
+    }
+}
+
+/* Small helper */
+.video-thumb {
+    cursor: pointer;
+}
