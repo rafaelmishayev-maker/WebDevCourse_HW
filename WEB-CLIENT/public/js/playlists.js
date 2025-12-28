@@ -1,473 +1,430 @@
-// playlists.js
-// Shows user's playlists, supports querystring playlistId, internal search, sorting, rating, delete video/playlist, and playlist player.
+/* playlists.js
+   - Shows all playlists of current user (stored in localStorage under playlists_<username>)
+   - Layout: sidebar + main
+   - Supports querystring (?playlist=NAME) and hash (#playlist=NAME)
+   - Default: first playlist if exists
+   - Rating per video (1-5), store per-video rating inside saved video object
+   - Sort: A-Z or Rating
+   - Filter by title
+   - Delete video / delete playlist
+   - Play single video in modal + play playlist (queue)
+*/
 
-const PLAYLISTS_KEY = "playlists";
+const PlaylistsPage = (() => {
+    function qs(id) { return document.getElementById(id); }
 
-let currentUser = null;
-let activePlaylistId = null;
+    function currentUser() { return Auth.getCurrentUserSession(); }
 
-// Bootstrap modal
-let createModal = null;
-let playerModal = null;
-
-// Player state
-let playerIndex = 0;
-
-document.addEventListener("DOMContentLoaded", () => {
-    currentUser = getCurrentUser();
-    if (!currentUser) {
-        window.location.href = "login.html";
-        return;
+    function userKey() {
+        const u = currentUser();
+        return `playlists_${(u.username || "").toLowerCase()}`;
     }
 
-    createModal = new bootstrap.Modal(document.getElementById("createPlaylistModal"));
-    playerModal = new bootstrap.Modal(document.getElementById("playerModal"));
-
-    // Events
-    document.getElementById("newPlaylistBtn").addEventListener("click", () => {
-        document.getElementById("newPlaylistName").value = "";
-        setMsg("createMsg", "", "");
-        createModal.show();
-    });
-
-    document.getElementById("confirmCreatePlaylist").addEventListener("click", createNewPlaylist);
-    document.getElementById("playPlaylistBtn").addEventListener("click", playActivePlaylist);
-    document.getElementById("deletePlaylistBtn").addEventListener("click", deleteActivePlaylist);
-
-    document.getElementById("internalSearch").addEventListener("input", renderActivePlaylistVideos);
-    document.getElementById("sortSelect").addEventListener("change", renderActivePlaylistVideos);
-
-    document.getElementById("prevBtn").addEventListener("click", () => stepPlayer(-1));
-    document.getElementById("nextBtn").addEventListener("click", () => stepPlayer(1));
-
-    // Stop video on close
-    document.getElementById("playerModal").addEventListener("hidden.bs.modal", () => {
-        document.getElementById("playerFrame").src = "";
-    });
-
-    // Load playlists and set active based on querystring (or default)
-    initActivePlaylistFromQuery();
-    renderSidebar();
-    ensureActivePlaylist();
-    renderActivePlaylistVideos();
-});
-
-function getCurrentUser() {
-    const raw = sessionStorage.getItem("currentUser");
-    return raw ? JSON.parse(raw) : null;
-}
-
-/* ------------------ QUERYSTRING ------------------ */
-
-function initActivePlaylistFromQuery() {
-    const params = new URLSearchParams(window.location.search);
-    const qsId = params.get("playlistId");
-    if (qsId) activePlaylistId = qsId;
-}
-
-function setQueryPlaylistId(id) {
-    const url = new URL(window.location.href);
-    url.searchParams.set("playlistId", id);
-    history.replaceState({}, "", url.toString());
-}
-
-/* ------------------ STORAGE ------------------ */
-
-function readAllPlaylists() {
-    const raw = localStorage.getItem(PLAYLISTS_KEY);
-    return raw ? JSON.parse(raw) : {};
-}
-
-function writeAllPlaylists(all) {
-    localStorage.setItem(PLAYLISTS_KEY, JSON.stringify(all));
-}
-
-function getUserPlaylists() {
-    const all = readAllPlaylists();
-    return all[currentUser.username] || [];
-}
-
-function setUserPlaylists(playlists) {
-    const all = readAllPlaylists();
-    all[currentUser.username] = playlists;
-    writeAllPlaylists(all);
-}
-
-function findActivePlaylist() {
-    const pls = getUserPlaylists();
-    return pls.find((p) => p.id === activePlaylistId) || null;
-}
-
-function ensureActivePlaylist() {
-    const pls = getUserPlaylists();
-
-    if (pls.length === 0) {
-        activePlaylistId = null;
-        setMainMsg(true, "בחר פלייליסט מהרשימה. (אין פלייליסטים עדיין — צור אחד חדש)");
-        updateHeader(null);
-        document.getElementById("videosGrid").innerHTML = "";
-        return;
+    function loadUserData() {
+        try {
+            const raw = localStorage.getItem(userKey());
+            const parsed = raw ? JSON.parse(raw) : null;
+            if (parsed && typeof parsed === "object") return parsed;
+        } catch { }
+        return { playlists: {} };
     }
 
-    // If querystring ID invalid, default to first
-    const exists = pls.some((p) => p.id === activePlaylistId);
-    if (!activePlaylistId || !exists) {
-        activePlaylistId = pls[0].id;
+    function saveUserData(data) {
+        localStorage.setItem(userKey(), JSON.stringify(data));
     }
 
-    setQueryPlaylistId(activePlaylistId);
-    setMainMsg(false, "");
-}
-
-/* ------------------ SIDEBAR ------------------ */
-
-function renderSidebar() {
-    const listEl = document.getElementById("playlistsList");
-    const msgEl = document.getElementById("sidebarMsg");
-
-    const pls = getUserPlaylists();
-
-    if (pls.length === 0) {
-        msgEl.textContent = "No playlists yet. Create one!";
-        listEl.innerHTML = "";
-        return;
+    function playlistNames(data) {
+        return Object.keys(data.playlists || {});
     }
 
-    msgEl.textContent = "";
+    function renderWelcome() {
+        const u = currentUser();
+        const displayName = u.firstName?.trim() ? u.firstName.trim() : u.username;
+        qs("welcomeMsg").textContent = `שלום ${displayName}`;
+        qs("userAvatar").src = u.imageUrl || "";
+    }
 
-    listEl.innerHTML = pls
-        .map((p) => {
-            const activeClass = p.id === activePlaylistId ? "active" : "";
-            const count = (p.items || []).length;
-            return `
-        <button
-          type="button"
-          class="list-group-item list-group-item-action ${activeClass}"
-          data-plid="${escapeHtml(p.id)}"
-          title="${escapeHtml(p.name)}"
-        >
-          <div class="d-flex justify-content-between align-items-center">
-            <span>${escapeHtml(p.name)}</span>
-            <span class="badge text-bg-secondary">${count}</span>
-          </div>
+    // ---------- URL parameter parsing ----------
+    function getRequestedPlaylistName() {
+        // Supports:
+        // 1) ?playlist=NAME
+        // 2) #playlist=NAME  (from toast)
+        const url = new URL(window.location.href);
+
+        const q = url.searchParams.get("playlist");
+        if (q) return q;
+
+        const hash = (url.hash || "").replace("#", "");
+        if (hash.startsWith("playlist=")) {
+            return decodeURIComponent(hash.slice("playlist=".length));
+        }
+        return "";
+    }
+
+    // ---------- State ----------
+    let data;
+    let activePlaylist = ""; // name
+    let playerModal;
+    let playingQueue = [];
+    let queueIndex = 0;
+
+    // ---------- Sidebar ----------
+    function setSidebarButtonsEnabled(enabled) {
+        qs("playPlaylistBtn").disabled = !enabled;
+        qs("deletePlaylistBtn").disabled = !enabled;
+    }
+
+    function renderSidebar() {
+        const list = qs("playlistList");
+        list.innerHTML = "";
+
+        const names = playlistNames(data);
+
+        if (names.length === 0) {
+            list.innerHTML = `<div class="text-muted small p-2">No playlists yet.</div>`;
+            setSidebarButtonsEnabled(false);
+            return;
+        }
+
+        names.forEach(name => {
+            const a = document.createElement("button");
+            a.type = "button";
+            a.className = "list-group-item list-group-item-action";
+            a.textContent = name;
+
+            if (name === activePlaylist) {
+                a.classList.add("active");
+            }
+
+            a.addEventListener("click", () => {
+                setActivePlaylist(name, true);
+            });
+
+            list.appendChild(a);
+        });
+
+        setSidebarButtonsEnabled(!!activePlaylist);
+    }
+
+    // ---------- Main content ----------
+    function getActiveVideos() {
+        if (!activePlaylist) return [];
+        return (data.playlists?.[activePlaylist] || []).slice();
+    }
+
+    function ensureRatingField(videos) {
+        // store rating in video object: rating: 0..5
+        for (const v of videos) {
+            if (typeof v.rating !== "number") v.rating = 0;
+        }
+    }
+
+    function sortVideos(videos) {
+        const mode = qs("sortSelect").value;
+        if (mode === "rating") {
+            videos.sort((a, b) => (b.rating || 0) - (a.rating || 0) || (a.title || "").localeCompare(b.title || ""));
+        } else {
+            videos.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+        }
+        return videos;
+    }
+
+    function filterVideos(videos) {
+        const term = qs("innerSearch").value.trim().toLowerCase();
+        if (!term) return videos;
+        return videos.filter(v => (v.title || "").toLowerCase().includes(term));
+    }
+
+    function starHtml(current) {
+        // 1..5 clickable
+        let out = "";
+        for (let i = 1; i <= 5; i++) {
+            const filled = i <= (current || 0);
+            out += `
+        <button type="button" class="btn btn-sm p-0 star-btn ${filled ? "text-warning" : "text-muted"}"
+                data-star="${i}" aria-label="rate ${i}">
+          ${filled ? "★" : "☆"}
         </button>
       `;
-        })
-        .join("");
-
-    listEl.querySelectorAll("[data-plid]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-            activePlaylistId = btn.dataset.plid;
-            setQueryPlaylistId(activePlaylistId);
-            renderSidebar();
-            renderActivePlaylistVideos();
-        });
-    });
-}
-
-/* ------------------ MAIN AREA (VIDEOS) ------------------ */
-
-function renderActivePlaylistVideos() {
-    ensureActivePlaylist();
-
-    const playlist = findActivePlaylist();
-    if (!playlist) return;
-
-    updateHeader(playlist);
-
-    const grid = document.getElementById("videosGrid");
-    const searchText = document.getElementById("internalSearch").value.trim().toLowerCase();
-    const sortMode = document.getElementById("sortSelect").value;
-
-    let items = (playlist.items || []).map((it) => ({
-        ...it,
-        rating: Number(it.rating || 0),
-    }));
-
-    // Internal search filter by title
-    if (searchText) {
-        items = items.filter((it) => (it.title || "").toLowerCase().includes(searchText));
+        }
+        return out;
     }
 
-    // Sorting
-    if (sortMode === "az") {
-        items.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-    } else if (sortMode === "rating_desc") {
-        items.sort((a, b) => (b.rating || 0) - (a.rating || 0));
-    } else if (sortMode === "rating_asc") {
-        items.sort((a, b) => (a.rating || 0) - (b.rating || 0));
-    }
+    function renderMain() {
+        const empty = qs("emptyState");
+        const wrap = qs("videosWrap");
+        const nameEl = qs("activePlaylistName");
 
-    if (items.length === 0) {
-        grid.innerHTML = `
-      <div class="col-12">
-        <div class="alert alert-light border mb-0">
-          No videos match your filter (or playlist is empty).
-        </div>
-      </div>
-    `;
-        return;
-    }
+        if (!activePlaylist) {
+            nameEl.textContent = "No playlist selected";
+            empty.classList.remove("d-none");
+            wrap.classList.add("d-none");
+            wrap.innerHTML = "";
+            return;
+        }
 
-    grid.innerHTML = items
-        .map((v) => `
-      <div class="col-12 col-md-6 col-lg-4">
-        <div class="card shadow-sm h-100 video-card">
-          <img
-            src="${escapeHtml(v.thumbnailUrl || "")}"
-            class="card-img-top video-thumb"
-            alt="thumbnail"
-            data-action="play"
-            data-video-id="${escapeHtml(v.videoId)}"
-            data-title="${escapeHtml(v.title)}"
-          />
+        nameEl.textContent = `Active: ${activePlaylist}`;
 
+        let videos = getActiveVideos();
+        ensureRatingField(videos);
+
+        videos = sortVideos(filterVideos(videos));
+
+        if (videos.length === 0) {
+            empty.textContent = "This playlist is empty.";
+            empty.classList.remove("d-none");
+            wrap.classList.add("d-none");
+            wrap.innerHTML = "";
+            return;
+        }
+
+        empty.classList.add("d-none");
+        wrap.classList.remove("d-none");
+        wrap.innerHTML = "";
+
+        videos.forEach(v => {
+            const col = document.createElement("div");
+            col.className = "col-12 col-md-6 col-lg-4";
+
+            col.innerHTML = `
+        <div class="card shadow-sm h-100 position-relative">
+          <img src="${v.thumbnail}" class="card-img-top" alt="thumbnail" style="cursor:pointer;">
           <div class="card-body d-flex flex-column">
-            <h6
-              class="video-title mb-2"
-              title="${escapeHtml(v.title)}"
-              role="button"
-              data-action="play"
-              data-video-id="${escapeHtml(v.videoId)}"
-              data-title="${escapeHtml(v.title)}"
-            >
-              ${escapeHtml(v.title)}
-            </h6>
+            <h5 class="card-title video-title" style="cursor:pointer;" title="${v.title}" data-bs-toggle="tooltip">${v.title}</h5>
 
-            <div class="small text-muted mb-2">
-              <div><strong>Duration:</strong> ${escapeHtml(v.duration || "—")}</div>
-              <div><strong>Views:</strong> ${escapeHtml(v.views || "—")}</div>
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <span class="small text-muted">Your rating:</span>
+              <div class="stars" data-video-id="${v.videoId}">
+                ${starHtml(v.rating || 0)}
+              </div>
             </div>
 
-            <div class="mt-auto d-flex align-items-center gap-2">
-              <label class="small text-muted mb-0">Rating:</label>
-              <select class="form-select form-select-sm" style="max-width: 110px;"
-                data-action="rate"
-                data-video-id="${escapeHtml(v.videoId)}"
-              >
-                ${renderRatingOptions(v.rating)}
-              </select>
-
-              <button class="btn btn-sm btn-outline-danger ms-auto"
-                data-action="delete-video"
-                data-video-id="${escapeHtml(v.videoId)}"
-              >
-                Remove
-              </button>
+            <div class="mt-auto d-flex gap-2">
+              <button class="btn btn-primary btn-sm play-one">Play</button>
+              <button class="btn btn-outline-danger btn-sm delete-one">Remove</button>
             </div>
           </div>
         </div>
-      </div>
-    `)
-        .join("");
+      `;
 
-    // Play events
-    grid.querySelectorAll("[data-action='play']").forEach((el) => {
-        el.addEventListener("click", () => openPlayer(el.dataset.videoId, el.dataset.title));
-    });
+            // play click on image/title
+            col.querySelector("img").addEventListener("click", () => openPlayer(v.videoId, v.title));
+            col.querySelector(".video-title").addEventListener("click", () => openPlayer(v.videoId, v.title));
+            col.querySelector(".play-one").addEventListener("click", () => openPlayer(v.videoId, v.title));
 
-    // Rating events
-    grid.querySelectorAll("[data-action='rate']").forEach((sel) => {
-        sel.addEventListener("change", () => {
-            const videoId = sel.dataset.videoId;
-            const rating = Number(sel.value);
-            setVideoRating(videoId, rating);
-            // re-render if sorting by rating
-            if (document.getElementById("sortSelect").value.startsWith("rating")) {
-                renderActivePlaylistVideos();
+            // delete video
+            col.querySelector(".delete-one").addEventListener("click", () => {
+                removeVideoFromActive(v.videoId);
+            });
+
+            // rating stars
+            col.querySelectorAll(".star-btn").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const rating = Number(btn.getAttribute("data-star"));
+                    setVideoRating(v.videoId, rating);
+                });
+            });
+
+            wrap.appendChild(col);
+        });
+
+        // tooltips
+        document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootstrap.Tooltip(el));
+    }
+
+    function setVideoRating(videoId, rating) {
+        if (!activePlaylist) return;
+        const arr = data.playlists[activePlaylist] || [];
+        const item = arr.find(x => x.videoId === videoId);
+        if (!item) return;
+        item.rating = rating;
+        saveUserData(data);
+        renderMain();
+    }
+
+    function removeVideoFromActive(videoId) {
+        if (!activePlaylist) return;
+        const arr = data.playlists[activePlaylist] || [];
+        const next = arr.filter(v => v.videoId !== videoId);
+        data.playlists[activePlaylist] = next;
+        saveUserData(data);
+        renderMain();
+    }
+
+    function deleteActivePlaylist() {
+        if (!activePlaylist) return;
+        const ok = confirm(`Delete playlist "${activePlaylist}"?`);
+        if (!ok) return;
+
+        delete data.playlists[activePlaylist];
+        saveUserData(data);
+
+        // choose next active playlist
+        const names = playlistNames(data);
+        activePlaylist = names[0] || "";
+        renderSidebar();
+        renderMain();
+
+        // update URL
+        setUrlPlaylist(activePlaylist);
+    }
+
+    function setUrlPlaylist(name) {
+        const url = new URL(window.location.href);
+        if (name) {
+            url.searchParams.set("playlist", name);
+            url.hash = "";
+        } else {
+            url.searchParams.delete("playlist");
+            url.hash = "";
+        }
+        window.history.replaceState({}, "", url.toString());
+    }
+
+    function setActivePlaylist(name, updateUrl) {
+        activePlaylist = name || "";
+        if (updateUrl) setUrlPlaylist(activePlaylist);
+        renderSidebar();
+        renderMain();
+    }
+
+    // ---------- Create playlist modal ----------
+    let createModal;
+
+    function showCreateError(msg) {
+        const box = qs("createError");
+        box.textContent = msg;
+        box.classList.remove("d-none");
+    }
+
+    function hideCreateError() {
+        const box = qs("createError");
+        box.classList.add("d-none");
+        box.textContent = "";
+    }
+
+    function createPlaylist(nameRaw) {
+        const name = (nameRaw || "").trim();
+        if (!name) return { ok: false, msg: "Playlist name is required." };
+
+        if (!data.playlists) data.playlists = {};
+        if (data.playlists[name]) return { ok: false, msg: "Playlist already exists." };
+
+        data.playlists[name] = [];
+        saveUserData(data);
+        return { ok: true, name };
+    }
+
+    // ---------- Player ----------
+    function openPlayer(videoId, title) {
+        qs("playerTitle").textContent = title || "Player";
+        qs("playerFrame").src = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
+        playerModal.show();
+    }
+
+    function stopPlayer() {
+        qs("playerFrame").src = "";
+    }
+
+    // Play playlist (simple queue: plays videos sequentially when modal closes -> next)
+    function playPlaylist() {
+        const videos = getActiveVideos();
+        if (!videos.length) {
+            alert("Playlist is empty.");
+            return;
+        }
+        playingQueue = videos.slice();
+        queueIndex = 0;
+        openPlayer(playingQueue[0].videoId, playingQueue[0].title);
+    }
+
+    function playNextInQueue() {
+        if (!playingQueue.length) return;
+        queueIndex++;
+        if (queueIndex >= playingQueue.length) {
+            playingQueue = [];
+            queueIndex = 0;
+            return;
+        }
+        openPlayer(playingQueue[queueIndex].videoId, playingQueue[queueIndex].title);
+    }
+
+    // ---------- Init ----------
+    function initDefaultPlaylistFromUrlOrFirst() {
+        const names = playlistNames(data);
+        const requested = getRequestedPlaylistName();
+
+        if (requested && names.includes(requested)) {
+            activePlaylist = requested;
+            setUrlPlaylist(activePlaylist);
+            return;
+        }
+
+        // default: first playlist
+        activePlaylist = names[0] || "";
+        if (activePlaylist) setUrlPlaylist(activePlaylist);
+    }
+
+    function init() {
+        renderWelcome();
+
+        data = loadUserData();
+
+        // modals
+        createModal = new bootstrap.Modal(qs("createPlaylistModal"));
+        playerModal = new bootstrap.Modal(qs("playerModal"));
+        qs("playerModal").addEventListener("hidden.bs.modal", () => {
+            stopPlayer();
+            // if queue active, move to next
+            if (playingQueue.length) {
+                // small delay so bootstrap finishes close animation
+                setTimeout(playNextInQueue, 200);
             }
         });
-    });
 
-    // Delete video events
-    grid.querySelectorAll("[data-action='delete-video']").forEach((btn) => {
-        btn.addEventListener("click", () => {
-            const videoId = btn.dataset.videoId;
-            deleteVideoFromActivePlaylist(videoId);
+        // URL -> active playlist
+        initDefaultPlaylistFromUrlOrFirst();
+
+        // render
+        renderSidebar();
+        renderMain();
+
+        // sidebar buttons
+        qs("playPlaylistBtn").addEventListener("click", playPlaylist);
+        qs("deletePlaylistBtn").addEventListener("click", deleteActivePlaylist);
+
+        // create playlist
+        qs("newPlaylistBtn").addEventListener("click", () => {
+            hideCreateError();
+            qs("playlistNameInput").value = "";
+            createModal.show();
         });
-    });
-}
 
-function updateHeader(playlist) {
-    const titleEl = document.getElementById("activePlaylistTitle");
-    const metaEl = document.getElementById("activePlaylistMeta");
+        qs("createPlaylistConfirm").addEventListener("click", () => {
+            hideCreateError();
+            const name = qs("playlistNameInput").value;
+            const res = createPlaylist(name);
+            if (!res.ok) {
+                showCreateError(res.msg);
+                return;
+            }
+            createModal.hide();
 
-    if (!playlist) {
-        titleEl.textContent = "Playlists";
-        metaEl.textContent = "";
-        return;
+            // activate new playlist
+            setActivePlaylist(res.name, true);
+        });
+
+        // main controls
+        qs("innerSearch").addEventListener("input", renderMain);
+        qs("sortSelect").addEventListener("change", renderMain);
+
+        // Also handle back/forward changing querystring:
+        window.addEventListener("popstate", () => {
+            const requested = getRequestedPlaylistName();
+            const names = playlistNames(data);
+            if (requested && names.includes(requested)) setActivePlaylist(requested, false);
+        });
     }
 
-    titleEl.textContent = playlist.name;
-    metaEl.textContent = `${(playlist.items || []).length} video(s)`;
-}
-
-function renderRatingOptions(current) {
-    const opts = [];
-    opts.push(`<option value="0" ${current === 0 ? "selected" : ""}>0</option>`);
-    for (let i = 1; i <= 10; i++) {
-        opts.push(`<option value="${i}" ${current === i ? "selected" : ""}>${i}</option>`);
-    }
-    return opts.join("");
-}
-
-/* ------------------ RATING / DELETE ------------------ */
-
-function setVideoRating(videoId, rating) {
-    const pls = getUserPlaylists();
-    const pl = pls.find((p) => p.id === activePlaylistId);
-    if (!pl) return;
-
-    const item = (pl.items || []).find((it) => it.videoId === videoId);
-    if (!item) return;
-
-    item.rating = rating;
-    setUserPlaylists(pls);
-}
-
-function deleteVideoFromActivePlaylist(videoId) {
-    const pl = findActivePlaylist();
-    if (!pl) return;
-
-    const ok = confirm("Remove this video from the playlist?");
-    if (!ok) return;
-
-    const pls = getUserPlaylists();
-    const target = pls.find((p) => p.id === activePlaylistId);
-    target.items = (target.items || []).filter((it) => it.videoId !== videoId);
-
-    setUserPlaylists(pls);
-    renderSidebar();
-    renderActivePlaylistVideos();
-}
-
-/* ------------------ CREATE / DELETE PLAYLIST ------------------ */
-
-function createNewPlaylist() {
-    const name = document.getElementById("newPlaylistName").value.trim();
-    if (!name) {
-        setMsg("createMsg", "Please enter a playlist name.", "text-danger");
-        return;
-    }
-
-    const pls = getUserPlaylists();
-    const newPl = {
-        id: createId("pl"),
-        name,
-        items: [],
-        createdAt: new Date().toISOString(),
-    };
-
-    pls.push(newPl);
-    setUserPlaylists(pls);
-
-    activePlaylistId = newPl.id;
-    setQueryPlaylistId(activePlaylistId);
-
-    createModal.hide();
-    renderSidebar();
-    renderActivePlaylistVideos();
-}
-
-function deleteActivePlaylist() {
-    const pl = findActivePlaylist();
-    if (!pl) {
-        alert("No active playlist to delete.");
-        return;
-    }
-
-    const ok = confirm(`Delete playlist "${pl.name}"? This cannot be undone.`);
-    if (!ok) return;
-
-    let pls = getUserPlaylists();
-    pls = pls.filter((p) => p.id !== activePlaylistId);
-    setUserPlaylists(pls);
-
-    // Reset active
-    activePlaylistId = null;
-    renderSidebar();
-    ensureActivePlaylist();
-    renderActivePlaylistVideos();
-}
-
-/* ------------------ PLAYLIST PLAYER ------------------ */
-
-function playActivePlaylist() {
-    const pl = findActivePlaylist();
-    if (!pl) {
-        alert("Choose a playlist first.");
-        return;
-    }
-
-    const items = pl.items || [];
-    if (items.length === 0) {
-        alert("This playlist is empty.");
-        return;
-    }
-
-    playerIndex = 0;
-    openPlayer(items[playerIndex].videoId, items[playerIndex].title, true);
-}
-
-function stepPlayer(delta) {
-    const pl = findActivePlaylist();
-    if (!pl) return;
-
-    const items = pl.items || [];
-    if (items.length === 0) return;
-
-    playerIndex += delta;
-    if (playerIndex < 0) playerIndex = 0;
-    if (playerIndex >= items.length) playerIndex = items.length - 1;
-
-    openPlayer(items[playerIndex].videoId, items[playerIndex].title, true);
-}
-
-function openPlayer(videoId, title, fromPlaylistPlayer = false) {
-    document.getElementById("playerTitle").textContent = title;
-    document.getElementById("playerFrame").src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1`;
-
-    if (fromPlaylistPlayer) {
-        const pl = findActivePlaylist();
-        const total = (pl?.items || []).length;
-        document.getElementById("playerCounter").textContent = `${playerIndex + 1} / ${total}`;
-    } else {
-        document.getElementById("playerCounter").textContent = "";
-    }
-
-    playerModal.show();
-}
-
-/* ------------------ UI HELPERS ------------------ */
-
-function setMainMsg(show, text) {
-    const el = document.getElementById("mainMsg");
-    if (show) {
-        el.classList.remove("d-none");
-        el.textContent = text;
-    } else {
-        el.classList.add("d-none");
-        el.textContent = "";
-    }
-}
-
-function setMsg(id, text, className) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.className = `small mt-2 ${className || ""}`;
-    el.textContent = text;
-}
-
-function createId(prefix) {
-    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function escapeHtml(str) {
-    return String(str).replace(/[&<>"']/g, (m) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#039;",
-    }[m]));
-}
+    return { init };
+})();

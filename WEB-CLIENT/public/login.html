@@ -1,73 +1,57 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
-    <meta charset="utf-8" />
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CLIENT WEB | Login</title>
+    <title>Login</title>
 
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="css/style.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css" />
 </head>
 
-<body>
+<body class="bg-light">
 
-    <!-- Navbar -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="index.html">CLIENT WEB</a>
-
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-
-            <div class="collapse navbar-collapse" id="mainNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item"><a class="nav-link" href="search.html">Search</a></li>
-                    <li class="nav-item"><a class="nav-link" href="playlists.html">Playlists</a></li>
-                </ul>
-
-                <!-- Filled dynamically -->
-                <div id="navAuthArea" class="d-flex align-items-center gap-2"></div>
-            </div>
-        </div>
-    </nav>
-
-    <main class="container mt-4">
-        <h1 class="page-title">Login</h1>
-
+    <div class="container py-5" style="max-width: 720px;">
         <div class="card shadow-sm">
-            <div class="card-body">
-                <form id="loginForm" class="row g-3" novalidate>
+            <div class="card-body p-4">
 
-                    <div class="col-12">
-                        <label class="form-label" for="loginUsername">Username</label>
-                        <input class="form-control" id="loginUsername" required />
-                        <div class="invalid-feedback">Username is required</div>
+                <h1 class="h3 mb-3 text-center">Login</h1>
+                <p class="text-muted text-center mb-4">Enter your credentials</p>
+
+                <!-- Alert -->
+                <div id="alertBox" class="alert d-none" role="alert"></div>
+
+                <form id="loginForm" novalidate>
+                    <div class="mb-3">
+                        <label class="form-label">Username *</label>
+                        <input type="text" class="form-control" id="username" required />
+                        <div class="invalid-feedback">Username is required.</div>
                     </div>
 
-                    <div class="col-12">
-                        <label class="form-label" for="loginPassword">Password</label>
-                        <input class="form-control" id="loginPassword" type="password" required />
-                        <div class="invalid-feedback">Password is required</div>
+                    <div class="mb-4">
+                        <label class="form-label">Password *</label>
+                        <input type="password" class="form-control" id="password" required />
+                        <div class="invalid-feedback">Password is required.</div>
                     </div>
 
-                    <div class="col-12 d-flex gap-2">
-                        <button class="btn btn-primary" type="submit">Login</button>
-                        <a class="btn btn-outline-secondary" href="register.html">Register</a>
-                    </div>
-
-                    <div class="col-12">
-                        <div id="loginMsg" class="small mt-2"></div>
-                    </div>
-
+                    <button type="submit" class="btn btn-primary w-100">Login</button>
                 </form>
+
+                <div class="text-center mt-3">
+                    <span class="text-muted">No account?</span>
+                    <a href="register.html">Register</a>
+                </div>
+
             </div>
         </div>
-    </main>
+    </div>
 
-    <script src="js/main.js"></script>
     <script src="js/auth.js"></script>
+    <script>
+        Auth.initLoginPage();
+    </script>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 

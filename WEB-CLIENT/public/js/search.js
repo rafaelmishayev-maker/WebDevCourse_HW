@@ -1,330 +1,424 @@
-// search.js (URL-based)
-// No YouTube Data API, no API key.
-// We parse a YouTube URL, fetch title+thumbnail via oEmbed (no key), then allow play + add to playlists.
+/* search.js
+   - YouTube Data API v3: search + videos(details)
+   - Render cards with: title (2-line clamp + tooltip), thumbnail, duration, views
+   - Play in Bootstrap modal
+   - Add to favorites playlists (per logged-in user) in localStorage
+   - If video already in any playlist: show check overlay + disable/gray add button
+   - Toast with link to playlists.html (with hash)
+*/
 
-const PLAYLISTS_KEY = "playlists";
+const SearchPage = (() => {
+    // ====== CONFIG ======
+    const YT_API_KEY = "AIzaSyBx5IORHW_KI5118yxivuW-dQtezxiLO5w"; // <-- my key
+    const MAX_RESULTS = 12;
 
-let currentUser = null;
-let playerModalInstance = null;
-let addModalInstance = null;
-let toastInstance = null;
-
-let pendingVideo = null;
-
-document.addEventListener("DOMContentLoaded", () => {
-    currentUser = getCurrentUser();
-    if (!currentUser) {
-        window.location.href = "login.html";
-        return;
+    // localStorage key for playlists
+    // each user has its own object: { playlists: { [playlistName]: [videoObj, ...] } }
+    function userPlaylistsKey(username) {
+        return `playlists_${(username || "").toLowerCase()}`;
     }
 
-    // Welcome
-    document.getElementById("welcomeTitle").textContent = `שלום ${currentUser.username}`;
-    const img = document.getElementById("welcomeImg");
-    img.src = currentUser.imageUrl;
-    img.onerror = () => (img.src = "https://via.placeholder.com/56?text=User");
+    // ====== Helpers ======
+    function qs(id) { return document.getElementById(id); }
 
-    // Bootstrap
-    playerModalInstance = new bootstrap.Modal(document.getElementById("playerModal"));
-    addModalInstance = new bootstrap.Modal(document.getElementById("addModal"));
-    toastInstance = new bootstrap.Toast(document.getElementById("saveToast"));
-
-    // Events
-    document.getElementById("urlForm").addEventListener("submit", onUrlSubmit);
-    document.getElementById("confirmAddBtn").addEventListener("click", onConfirmAdd);
-
-    // Stop video when modal closes
-    document.getElementById("playerModal").addEventListener("hidden.bs.modal", () => {
-        document.getElementById("playerFrame").src = "";
-    });
-});
-
-// ---------- SESSION ----------
-function getCurrentUser() {
-    const raw = sessionStorage.getItem("currentUser");
-    return raw ? JSON.parse(raw) : null;
-}
-
-// ---------- URL FLOW ----------
-async function onUrlSubmit(e) {
-    e.preventDefault();
-
-    const urlEl = document.getElementById("videoUrl");
-    const msgEl = document.getElementById("urlMsg");
-    const grid = document.getElementById("resultsGrid");
-
-    setMsg(msgEl, "", "");
-    grid.innerHTML = "";
-
-    const url = urlEl.value.trim();
-    if (!url) {
-        setMsg(msgEl, "Please paste a URL.", "text-danger");
-        return;
+    function currentUser() {
+        return Auth.getCurrentUserSession();
     }
 
-    const videoId = extractYouTubeVideoId(url);
-    if (!videoId) {
-        setMsg(msgEl, "Invalid YouTube URL. Try watch?v=..., youtu.be/..., or /shorts/...", "text-danger");
-        return;
+    function formatNumber(n) {
+        if (n === null || n === undefined) return "-";
+        const num = Number(n);
+        if (Number.isNaN(num)) return "-";
+        return num.toLocaleString();
     }
 
-    try {
-        // Fetch metadata (title + thumbnail) via oEmbed (no key)
-        const meta = await fetchOEmbed(url);
+    // ISO 8601 duration (PT#H#M#S) -> mm:ss or h:mm:ss
+    function parseISODuration(iso) {
+        if (!iso) return "-";
+        const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+        if (!m) return "-";
+        const h = Number(m[1] || 0);
+        const min = Number(m[2] || 0);
+        const s = Number(m[3] || 0);
+        const total = h * 3600 + min * 60 + s;
+        const hh = Math.floor(total / 3600);
+        const mm = Math.floor((total % 3600) / 60);
+        const ss = total % 60;
 
-        const video = {
-            videoId,
-            title: meta.title || "YouTube Video",
-            thumbnailUrl: meta.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-            // Not available without YouTube Data API:
-            duration: "—",
-            views: "—",
-        };
-
-        renderSingleResult(video);
-    } catch (err) {
-        console.error(err);
-        setMsg(msgEl, "Could not fetch video info. The URL might be private/blocked.", "text-danger");
+        const pad2 = (x) => String(x).padStart(2, "0");
+        if (hh > 0) return `${hh}:${pad2(mm)}:${pad2(ss)}`;
+        return `${mm}:${pad2(ss)}`;
     }
-}
 
-function extractYouTubeVideoId(url) {
-    try {
-        const u = new URL(url);
+    function clampTitleWithTooltip(el, fullTitle) {
+        // If it gets clamped, show tooltip on hover
+        // We’ll always set title attribute; tooltip will show via Bootstrap tooltips.
+        el.setAttribute("title", fullTitle);
+        el.setAttribute("data-bs-toggle", "tooltip");
+        el.setAttribute("data-bs-placement", "top");
+    }
 
-        // youtu.be/<id>
-        if (u.hostname.includes("youtu.be")) {
-            const id = u.pathname.split("/").filter(Boolean)[0];
-            return id || null;
+    function getUserData() {
+        const u = currentUser();
+        const key = userPlaylistsKey(u.username);
+        try {
+            const raw = localStorage.getItem(key);
+            const parsed = raw ? JSON.parse(raw) : null;
+            if (parsed && typeof parsed === "object") return parsed;
+        } catch { }
+        return { playlists: {} };
+    }
+
+    function saveUserData(data) {
+        const u = currentUser();
+        const key = userPlaylistsKey(u.username);
+        localStorage.setItem(key, JSON.stringify(data));
+    }
+
+    function listPlaylistNames() {
+        const data = getUserData();
+        return Object.keys(data.playlists || {});
+    }
+
+    function isVideoInAnyPlaylist(videoId) {
+        const data = getUserData();
+        const pls = data.playlists || {};
+        for (const name of Object.keys(pls)) {
+            const arr = pls[name] || [];
+            if (arr.some(v => v.videoId === videoId)) return true;
+        }
+        return false;
+    }
+
+    function addVideoToPlaylist(playlistName, videoObj) {
+        const data = getUserData();
+        if (!data.playlists) data.playlists = {};
+        if (!data.playlists[playlistName]) data.playlists[playlistName] = [];
+
+        const already = data.playlists[playlistName].some(v => v.videoId === videoObj.videoId);
+        if (already) return { ok: false, reason: "Video already exists in this playlist." };
+
+        data.playlists[playlistName].push(videoObj);
+        saveUserData(data);
+        return { ok: true };
+    }
+
+    // ====== YouTube API ======
+    async function ytSearch(query) {
+        const params = new URLSearchParams({
+            part: "snippet",
+            q: query,
+            type: "video",
+            maxResults: String(MAX_RESULTS),
+            key: YT_API_KEY
+        });
+
+        const url = `https://www.googleapis.com/youtube/v3/search?${params.toString()}`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!res.ok) {
+            const msg = data?.error?.message || "YouTube search failed";
+            throw new Error(msg);
+        }
+        return data.items || [];
+    }
+
+    async function ytGetVideoDetails(videoIds) {
+        if (!videoIds.length) return new Map();
+
+        const params = new URLSearchParams({
+            part: "contentDetails,statistics",
+            id: videoIds.join(","),
+            key: YT_API_KEY
+        });
+
+        const url = `https://www.googleapis.com/youtube/v3/videos?${params.toString()}`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!res.ok) {
+            const msg = data?.error?.message || "YouTube videos(details) failed";
+            throw new Error(msg);
         }
 
-        // youtube.com/watch?v=<id>
-        if (u.hostname.includes("youtube.com") || u.hostname.includes("m.youtube.com")) {
-            if (u.pathname === "/watch") {
-                return u.searchParams.get("v");
-            }
-
-            // youtube.com/shorts/<id>
-            const parts = u.pathname.split("/").filter(Boolean);
-            if (parts[0] === "shorts" && parts[1]) return parts[1];
-
-            // youtube.com/embed/<id>
-            if (parts[0] === "embed" && parts[1]) return parts[1];
+        const map = new Map();
+        for (const item of (data.items || [])) {
+            map.set(item.id, {
+                duration: parseISODuration(item.contentDetails?.duration),
+                views: item.statistics?.viewCount ?? null
+            });
         }
-
-        return null;
-    } catch {
-        return null;
+        return map;
     }
-}
 
-async function fetchOEmbed(videoUrl) {
-    // YouTube oEmbed endpoint (no key needed)
-    const endpoint = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(videoUrl)}`;
-    const res = await fetch(endpoint);
-    if (!res.ok) throw new Error("oEmbed failed");
-    return await res.json();
-}
+    // ====== Rendering ======
+    function renderWelcome() {
+        const u = currentUser();
+        const welcome = qs("welcomeMsg");
+        const avatar = qs("userAvatar");
 
-// ---------- RENDER ----------
-function renderSingleResult(v) {
-    const grid = document.getElementById("resultsGrid");
-    const userPlaylists = getUserPlaylists(currentUser.username);
-    const existingVideoIds = new Set(getAllVideoIdsFromPlaylists(userPlaylists));
-    const alreadySaved = existingVideoIds.has(v.videoId);
+        // Requirement says: "שלום [שם המשתמש]"
+        // We'll use firstName if exists, else username
+        const displayName = u.firstName?.trim() ? u.firstName.trim() : u.username;
 
-    const btnClass = alreadySaved ? "btn-secondary" : "btn-outline-primary";
-    const btnText = alreadySaved ? "Added" : "Add to favorites";
-    const btnDisabled = alreadySaved ? "disabled" : "";
+        welcome.textContent = `Hello ${displayName}`;
+        avatar.src = u.imageUrl || "";
+    }
 
-    grid.innerHTML = `
-    <div class="col-12 col-md-6 col-lg-4">
-      <div class="card shadow-sm video-card h-100">
-        ${alreadySaved ? `<div class="card-check">✓</div>` : ""}
+    function renderPlaylistDropdown() {
+        const select = qs("playlistSelect");
+        select.innerHTML = `<option value="">-- Select playlist --</option>`;
+        for (const name of listPlaylistNames()) {
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = name;
+            select.appendChild(opt);
+        }
+    }
 
-        <img
-          src="${escapeHtml(v.thumbnailUrl)}"
-          class="card-img-top video-thumb"
-          alt="thumbnail"
-          role="button"
-          id="thumbPlay"
-        />
+    function makeCard(video, meta) {
+        const alreadyFav = isVideoInAnyPlaylist(video.videoId);
+
+        const col = document.createElement("div");
+        col.className = "col-12 col-md-6 col-lg-4";
+
+        const btnClass = alreadyFav ? "btn btn-secondary btn-sm" : "btn btn-outline-primary btn-sm";
+        const btnText = alreadyFav ? "Added" : "Add to favorites";
+
+        col.innerHTML = `
+      <div class="card shadow-sm h-100 video-card position-relative">
+        ${alreadyFav ? `<div class="card-check">✓</div>` : ""}
+
+        <img src="${video.thumbnail}" class="card-img-top video-thumb" alt="thumbnail" style="cursor:pointer;">
 
         <div class="card-body d-flex flex-column">
-          <h6
-            class="video-title mb-2"
-            title="${escapeHtml(v.title)}"
-            role="button"
-            id="titlePlay"
-          >
-            ${escapeHtml(v.title)}
-          </h6>
+          <h5 class="card-title video-title mb-2" style="cursor:pointer;"></h5>
 
           <div class="small text-muted mb-2">
-            <div><strong>Duration:</strong> ${escapeHtml(v.duration)}</div>
-            <div><strong>Views:</strong> ${escapeHtml(v.views)}</div>
+            <div><strong>Duration:</strong> <span class="v-duration">${meta.duration ?? "-"}</span></div>
+            <div><strong>Views:</strong> <span class="v-views">${formatNumber(meta.views)}</span></div>
           </div>
 
           <div class="mt-auto d-flex gap-2">
-            <button class="btn btn-sm btn-outline-dark" id="btnPlay">Player</button>
-
-            <button
-              class="btn btn-sm ${btnClass} flex-grow-1"
-              id="btnAdd"
-              ${btnDisabled}
-            >
-              ${btnText}
-            </button>
+            <button class="btn btn-primary btn-sm play-btn">Play</button>
+            <button class="${btnClass} add-btn" ${alreadyFav ? "disabled" : ""}>${btnText}</button>
           </div>
         </div>
       </div>
-    </div>
-  `;
+    `;
 
-    // Play handlers
-    document.getElementById("thumbPlay").addEventListener("click", () => openPlayerModal(v.videoId, v.title));
-    document.getElementById("titlePlay").addEventListener("click", () => openPlayerModal(v.videoId, v.title));
-    document.getElementById("btnPlay").addEventListener("click", () => openPlayerModal(v.videoId, v.title));
+        const titleEl = col.querySelector(".video-title");
+        titleEl.textContent = video.title;
+        clampTitleWithTooltip(titleEl, video.title);
 
-    // Add handler
-    const btnAdd = document.getElementById("btnAdd");
-    if (btnAdd && !alreadySaved) {
-        btnAdd.addEventListener("click", () => openAddModal(v));
-    }
-}
+        // Click title/thumb -> open modal player
+        col.querySelector(".video-thumb").addEventListener("click", () => openPlayer(video.videoId, video.title));
+        titleEl.addEventListener("click", () => openPlayer(video.videoId, video.title));
+        col.querySelector(".play-btn").addEventListener("click", () => openPlayer(video.videoId, video.title));
 
-// ---------- PLAYER MODAL ----------
-function openPlayerModal(videoId, title) {
-    document.getElementById("playerTitle").textContent = title;
-    document.getElementById("playerFrame").src =
-        `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1`;
-    playerModalInstance.show();
-}
+        // Add to favorites
+        col.querySelector(".add-btn").addEventListener("click", () => openAddModal(video));
 
-// ---------- ADD TO PLAYLIST ----------
-function openAddModal(video) {
-    pendingVideo = video;
-
-    document.getElementById("addVideoTitle").textContent = video.title;
-    document.getElementById("newPlaylistName").value = "";
-    setMsg(document.getElementById("addMsg"), "", "");
-
-    const select = document.getElementById("playlistSelect");
-    const playlists = getUserPlaylists(currentUser.username);
-
-    select.innerHTML = playlists.length
-        ? playlists.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("")
-        : `<option value="">(No playlists yet)</option>`;
-
-    addModalInstance.show();
-}
-
-function onConfirmAdd() {
-    const msgEl = document.getElementById("addMsg");
-    setMsg(msgEl, "", "");
-
-    if (!pendingVideo) {
-        setMsg(msgEl, "No video selected.", "text-danger");
-        return;
+        return col;
     }
 
-    const username = currentUser.username;
+    function renderResults(videos, detailsMap) {
+        const grid = qs("resultsGrid");
+        const count = qs("resultsCount");
+        grid.innerHTML = "";
 
-    const playlistsAll = readAllPlaylists();
-    const userPlaylists = playlistsAll[username] || [];
+        count.textContent = `${videos.length} results`;
 
-    // Prevent duplicates across ALL playlists
-    const already = userPlaylists.some((pl) => (pl.items || []).some((it) => it.videoId === pendingVideo.videoId));
-    if (already) {
-        setMsg(msgEl, "This video is already in one of your playlists.", "text-danger");
-        return;
+        for (const v of videos) {
+            const meta = detailsMap.get(v.videoId) || { duration: "-", views: null };
+            grid.appendChild(makeCard(v, meta));
+        }
+
+        // enable bootstrap tooltips
+        const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+        tooltipTriggerList.forEach(el => new bootstrap.Tooltip(el));
     }
 
-    const selectedPlaylistId = document.getElementById("playlistSelect").value;
-    const newName = document.getElementById("newPlaylistName").value.trim();
+    // ====== Player Modal ======
+    let playerModal;
+    function openPlayer(videoId, title) {
+        qs("playerTitle").textContent = title || "Player";
+        // autoplay inside modal
+        qs("playerFrame").src = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
+        playerModal.show();
+    }
 
-    let targetPlaylist = null;
+    function stopPlayer() {
+        qs("playerFrame").src = "";
+    }
 
-    if (newName) {
-        targetPlaylist = { id: createId("pl"), name: newName, items: [] };
-        userPlaylists.push(targetPlaylist);
-    } else {
-        if (!selectedPlaylistId) {
-            setMsg(msgEl, "Please choose a playlist or create a new one.", "text-danger");
+    // ====== Add Modal ======
+    let addModal;
+    let saveToast;
+
+    function openAddModal(videoObj) {
+        // refresh dropdown on every open
+        renderPlaylistDropdown();
+
+        qs("selectedVideoId").value = videoObj.videoId;
+        qs("newPlaylistName").value = "";
+        qs("addError").classList.add("d-none");
+        qs("addError").textContent = "";
+
+        // store current selected video object in memory
+        openAddModal._video = videoObj;
+
+        addModal.show();
+    }
+
+    function showAddError(msg) {
+        const box = qs("addError");
+        box.textContent = msg;
+        box.classList.remove("d-none");
+    }
+
+    function showSavedToast(playlistName) {
+        const link = qs("toastLink");
+        link.href = `playlists.html#playlist=${encodeURIComponent(playlistName)}`;
+        link.textContent = `Go to "${playlistName}"`;
+        saveToast.show();
+    }
+
+    function handleConfirmAdd() {
+        const video = openAddModal._video;
+        if (!video) return;
+
+        const chosen = qs("playlistSelect").value.trim();
+        const newName = qs("newPlaylistName").value.trim();
+
+        let playlistName = "";
+        if (newName) playlistName = newName;
+        else if (chosen) playlistName = chosen;
+
+        if (!playlistName) {
+            showAddError("Please select an existing playlist or create a new one.");
             return;
         }
-        targetPlaylist = userPlaylists.find((p) => p.id === selectedPlaylistId);
-        if (!targetPlaylist) {
-            setMsg(msgEl, "Selected playlist not found.", "text-danger");
+
+        // If already in ANY playlist -> block (requirement 4.4 already shows disabled button,
+        // but just in case user opened modal earlier)
+        if (isVideoInAnyPlaylist(video.videoId)) {
+            showAddError("This video is already in your favorites (one of your playlists).");
             return;
+        }
+
+        const res = addVideoToPlaylist(playlistName, video);
+        if (!res.ok) {
+            showAddError(res.reason || "Failed to save.");
+            return;
+        }
+
+        addModal.hide();
+        showSavedToast(playlistName);
+
+        // Re-run the current results rendering state visually by triggering a new search render?
+        // Simple approach: just disable the relevant card button and show checkmark.
+        // We'll update cards in DOM:
+        markVideoAsSavedInUI(video.videoId);
+    }
+
+    function markVideoAsSavedInUI(videoId) {
+        const cards = document.querySelectorAll(".video-card");
+        cards.forEach(card => {
+            const playBtn = card.querySelector(".play-btn");
+            const addBtn = card.querySelector(".add-btn");
+            const titleEl = card.querySelector(".video-title");
+            const thumbEl = card.querySelector(".video-thumb");
+
+            // identify card by looking at the iframe link? We don't store id on card yet.
+            // We'll store data-video-id on title (easy):
+        });
+
+        // Better: set data-video-id at creation time. We'll patch quickly:
+        // (If your cards were rendered before, they already include it because we set it below in init hook.)
+        const card = document.querySelector(`[data-video-id="${CSS.escape(videoId)}"]`);
+        if (!card) return;
+
+        // add check overlay
+        if (!card.querySelector(".card-check")) {
+            const check = document.createElement("div");
+            check.className = "card-check";
+            check.textContent = "✓";
+            card.appendChild(check);
+        }
+
+        const addBtn = card.querySelector(".add-btn");
+        if (addBtn) {
+            addBtn.className = "btn btn-secondary btn-sm add-btn";
+            addBtn.textContent = "Added";
+            addBtn.disabled = true;
         }
     }
 
-    targetPlaylist.items = targetPlaylist.items || [];
-    targetPlaylist.items.push({
-        videoId: pendingVideo.videoId,
-        title: pendingVideo.title,
-        thumbnailUrl: pendingVideo.thumbnailUrl,
-        duration: pendingVideo.duration,
-        views: pendingVideo.views,
-        addedAt: new Date().toISOString(),
-    });
+    // ====== Search flow ======
+    async function runSearch(query) {
+        if (!YT_API_KEY || YT_API_KEY === "PUT_YOUR_API_KEY_HERE") {
+            alert("Please set your YouTube API key in js/search.js (YT_API_KEY).");
+            return;
+        }
 
-    playlistsAll[username] = userPlaylists;
-    localStorage.setItem(PLAYLISTS_KEY, JSON.stringify(playlistsAll));
+        qs("resultsCount").textContent = "Loading...";
+        qs("resultsGrid").innerHTML = "";
 
-    addModalInstance.hide();
-    showSavedToast(targetPlaylist);
+        const items = await ytSearch(query);
 
-    // Refresh preview to show ✓ and disable button
-    renderSingleResult(pendingVideo);
+        // normalize
+        const videos = items
+            .map(it => ({
+                videoId: it.id?.videoId,
+                title: it.snippet?.title || "",
+                thumbnail: it.snippet?.thumbnails?.high?.url
+                    || it.snippet?.thumbnails?.medium?.url
+                    || it.snippet?.thumbnails?.default?.url
+                    || "",
+                channelTitle: it.snippet?.channelTitle || ""
+            }))
+            .filter(v => !!v.videoId);
 
-    pendingVideo = null;
-}
+        const ids = videos.map(v => v.videoId);
+        const detailsMap = await ytGetVideoDetails(ids);
 
-function showSavedToast(playlist) {
-    const toastBody = document.getElementById("toastBody");
-    toastBody.innerHTML = `
-    Saved to <strong>${escapeHtml(playlist.name)}</strong>.
-    <a href="playlists.html?playlistId=${encodeURIComponent(playlist.id)}" class="ms-2">Go to playlist</a>
-  `;
-    toastInstance.show();
-}
+        renderResults(videos, detailsMap);
 
-// ---------- PLAYLIST STORAGE HELPERS ----------
-function readAllPlaylists() {
-    const raw = localStorage.getItem(PLAYLISTS_KEY);
-    return raw ? JSON.parse(raw) : {};
-}
+        // add data-video-id to each card root for UI updates
+        document.querySelectorAll(".video-card").forEach((card, idx) => {
+            const id = videos[idx]?.videoId;
+            if (id) card.setAttribute("data-video-id", id);
+        });
+    }
 
-function getUserPlaylists(username) {
-    const all = readAllPlaylists();
-    return all[username] || [];
-}
+    // ====== Init ======
+    function init() {
+        renderWelcome();
 
-function getAllVideoIdsFromPlaylists(playlists) {
-    const ids = [];
-    playlists.forEach((pl) => (pl.items || []).forEach((it) => ids.push(it.videoId)));
-    return ids;
-}
+        playerModal = new bootstrap.Modal(qs("playerModal"));
+        addModal = new bootstrap.Modal(qs("addModal"));
+        saveToast = new bootstrap.Toast(qs("saveToast"));
 
-function createId(prefix) {
-    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
+        // stop iframe on close modal
+        qs("playerModal").addEventListener("hidden.bs.modal", stopPlayer);
 
-// ---------- UI HELPERS ----------
-function setMsg(el, text, className) {
-    if (!el) return;
-    el.className = `small mt-2 ${className || ""}`;
-    el.textContent = text;
-}
+        qs("searchForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const q = qs("queryInput").value.trim();
+            if (!q) return;
 
-function escapeHtml(str) {
-    return String(str).replace(/[&<>"']/g, (m) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#039;",
-    }[m]));
-}
+            try {
+                await runSearch(q);
+            } catch (err) {
+                qs("resultsCount").textContent = "";
+                alert(err?.message || "Search failed");
+            }
+        });
+
+        qs("confirmAddBtn").addEventListener("click", handleConfirmAdd);
+    }
+
+    return { init };
+})();

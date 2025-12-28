@@ -1,35 +1,23 @@
-document.addEventListener("DOMContentLoaded", () => {
-  const authArea = document.getElementById("navAuthArea");
-  const currentUser = getCurrentUser();
+const Main = (() => {
+  function renderUserHeader() {
+    const container = document.getElementById("userHeader");
+    if (!container) return;
 
-  if (!authArea) return;
+    const user = Auth.getCurrentUserSession?.();
+    if (!user) {
+      container.innerHTML = "";
+      return;
+    }
 
-  if (currentUser) {
-    authArea.innerHTML = `
-      <div class="d-flex align-items-center gap-2 text-white">
-        <img src="${currentUser.imageUrl}" 
-             alt="User Image"
-             width="32" height="32"
-             class="rounded-circle border" />
-        <span>${currentUser.username}</span>
-        <button id="logoutBtn" class="btn btn-outline-light btn-sm">Logout</button>
+    container.innerHTML = `
+      <div class="d-flex align-items-center gap-2">
+        <img src="${user.imageUrl}" alt="avatar"
+             class="rounded-circle"
+             style="width:36px;height:36px;object-fit:cover;border:1px solid #ddd;">
+        <span class="fw-semibold">${user.username}</span>
       </div>
     `;
-
-    document.getElementById("logoutBtn").addEventListener("click", () => {
-      sessionStorage.removeItem("currentUser");
-      window.location.href = "index.html";
-    });
-
-  } else {
-    authArea.innerHTML = `
-      <a class="btn btn-outline-light btn-sm" href="login.html">Login</a>
-      <a class="btn btn-outline-light btn-sm" href="register.html">Register</a>
-    `;
   }
-});
 
-function getCurrentUser() {
-  const raw = sessionStorage.getItem("currentUser");
-  return raw ? JSON.parse(raw) : null;
-}
+  return { renderUserHeader };
+})();
