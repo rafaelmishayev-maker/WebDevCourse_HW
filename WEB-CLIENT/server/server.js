@@ -1,69 +1,76 @@
-// server/server.js
 const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const session = require("express-session");
 const multer = require("multer");
-const bcrypt = require("bcryptjs");
-const fs = require("fs/promises");
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
+// ---------- Paths ----------
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
-const DATA_DIR = path.join(__dirname, "data");
-const USERS_FILE = path.join(DATA_DIR, "users.json");
-const PLAYLISTS_DIR = path.join(DATA_DIR, "playlists");
+const DB_DIR = path.join(__dirname, "db");
+const USERS_FILE = path.join(DB_DIR, "users.json");
+const PLAYLISTS_DIR = path.join(DB_DIR, "playlists");
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 
+// ---------- Ensure dirs/files ----------
+function ensureDir(p) {
+    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
+ensureDir(DB_DIR);
+ensureDir(PLAYLISTS_DIR);
+ensureDir(UPLOADS_DIR);
+if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, JSON.stringify([], null, 2), "utf8");
+
 // ---------- Helpers ----------
-async function ensureDirs() {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    await fs.mkdir(PLAYLISTS_DIR, { recursive: true });
-    await fs.mkdir(UPLOADS_DIR, { recursive: true });
-
-    try { await fs.access(USERS_FILE); }
-    catch { await fs.writeFile(USERS_FILE, JSON.stringify([], null, 2)); }
-}
-
-async function readUsers() {
-    const raw = await fs.readFile(USERS_FILE, "utf-8");
-    return JSON.parse(raw);
-}
-
-async function writeUsers(users) {
-    await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
-}
-
-function playlistsFileFor(username) {
-    return path.join(PLAYLISTS_DIR, `${username}.json`);
-}
-
-async function readUserPlaylists(username) {
-    const file = playlistsFileFor(username);
+function readJson(filePath, fallback) {
     try {
-        const raw = await fs.readFile(file, "utf-8");
+        const raw = fs.readFileSync(filePath, "utf8");
         return JSON.parse(raw);
     } catch {
-        // first time -> empty array
-        await fs.writeFile(file, JSON.stringify([], null, 2));
-        return [];
+        return fallback;
     }
 }
 
-async function writeUserPlaylists(username, playlists) {
-    const file = playlistsFileFor(username);
-    await fs.writeFile(file, JSON.stringify(playlists, null, 2));
+function writeJson(filePath, data) {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+function normalizeUsername(u) {
+    return String(u || "").trim().toLowerCase();
+}
+
+function validatePassword(pw) {
+    if (typeof pw !== "string") return false;
+    if (pw.length < 6) return false;
+    const hasLetter = /[A-Za-z]/.test(pw);
+    const hasDigit = /\d/.test(pw);
+    const hasSpecial = /[^A-Za-z0-9]/.test(pw);
+    return hasLetter && hasDigit && hasSpecial;
 }
 
 function requireAuth(req, res, next) {
-    if (!req.session.user) {
-        return res.status(401).json({ error: "Not authenticated" });
+    if (!req.session?.user) {
+        return res.status(401).json({ error: "Unauthorized" });
     }
     next();
 }
 
-function makeId(prefix = "id") {
-    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+function userPlaylistFile(username) {
+    return path.join(PLAYLISTS_DIR, `${normalizeUsername(username)}.json`);
+}
+
+function loadUserPlaylists(username) {
+    const file = userPlaylistFile(username);
+    const data = readJson(file, { playlists: {} });
+    if (!data.playlists || typeof data.playlists !== "object") data.playlists = {};
+    return data;
+}
+
+function saveUserPlaylists(username, data) {
+    const file = userPlaylistFile(username);
+    writeJson(file, data);
 }
 
 // ---------- Middleware ----------
@@ -71,74 +78,70 @@ app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
-    secret: "replace_this_with_a_strong_secret",
+    secret: "replace_this_with_a_random_secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
         httpOnly: true,
+        sameSite: "lax"
+        // secure: true // enable only with https
     }
 }));
 
-// Serve static client
-app.use(express.static(PUBLIC_DIR));
-// Serve uploaded files (mp3)
+// Serve uploads (mp3)
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-// ---------- Auth API ----------
-app.post("/api/auth/register", async (req, res) => {
+// Serve static site
+app.use(express.static(PUBLIC_DIR));
+
+// ---------- AUTH API ----------
+app.post("/api/auth/register", (req, res) => {
     const { username, password, firstName, imageUrl } = req.body;
 
-    if (!username || !password || !firstName || !imageUrl) {
-        return res.status(400).json({ error: "Missing fields" });
+    const u = String(username || "").trim();
+    const pw = String(password || "");
+    const fn = String(firstName || "").trim();
+    const img = String(imageUrl || "").trim();
+
+    if (!u || !pw || !fn || !img) {
+        return res.status(400).json({ error: "Missing required fields" });
+    }
+    try {
+        const url = new URL(img);
+        if (!(url.protocol === "http:" || url.protocol === "https:")) throw new Error("bad url");
+    } catch {
+        return res.status(400).json({ error: "Invalid imageUrl" });
+    }
+    if (!validatePassword(pw)) {
+        return res.status(400).json({ error: "Password does not meet requirements" });
     }
 
-    // Password policy (same as client)
-    const hasLetter = /[A-Za-z]/.test(password);
-    const hasNumber = /\d/.test(password);
-    const hasSpecial = /[^A-Za-z0-9]/.test(password);
-    if (password.length < 6 || !hasLetter || !hasNumber || !hasSpecial) {
-        return res.status(400).json({ error: "Weak password" });
-    }
-
-    const users = await readUsers();
-    const exists = users.some(u => u.username.toLowerCase() === username.toLowerCase());
+    const users = readJson(USERS_FILE, []);
+    const exists = users.some(x => normalizeUsername(x.username) === normalizeUsername(u));
     if (exists) return res.status(409).json({ error: "Username already exists" });
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    users.push({ username: u, password: pw, firstName: fn, imageUrl: img });
+    writeJson(USERS_FILE, users);
 
-    users.push({
-        username,
-        passwordHash,
-        firstName,
-        imageUrl,
-        createdAt: new Date().toISOString()
-    });
+    // create empty playlists file
+    saveUserPlaylists(u, { playlists: {} });
 
-    await writeUsers(users);
-    // Create empty playlists file for user
-    await readUserPlaylists(username);
-
-    return res.json({ ok: true });
+    res.json({ ok: true });
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ error: "Missing fields" });
+    const u = String(username || "").trim();
+    const pw = String(password || "");
 
-    const users = await readUsers();
-    const user = users.find(u => u.username === username);
-    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+    if (!u || !pw) return res.status(400).json({ error: "Missing credentials" });
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+    const users = readJson(USERS_FILE, []);
+    const found = users.find(x => normalizeUsername(x.username) === normalizeUsername(u) && x.password === pw);
+    if (!found) return res.status(401).json({ error: "Invalid username or password" });
 
-    req.session.user = {
-        username: user.username,
-        firstName: user.firstName,
-        imageUrl: user.imageUrl
-    };
-
-    return res.json({ ok: true, user: req.session.user });
+    req.session.user = { username: found.username, firstName: found.firstName, imageUrl: found.imageUrl };
+    res.json({ ok: true, user: req.session.user });
 });
 
 app.post("/api/auth/logout", (req, res) => {
@@ -148,113 +151,118 @@ app.post("/api/auth/logout", (req, res) => {
 });
 
 app.get("/api/auth/me", (req, res) => {
-    return res.json({ user: req.session.user || null });
+    res.json({ user: req.session.user || null });
 });
 
-// ---------- Playlists API ----------
-app.get("/api/playlists", requireAuth, async (req, res) => {
-    const pls = await readUserPlaylists(req.session.user.username);
-    res.json({ playlists: pls });
+// ---------- PLAYLISTS API ----------
+app.get("/api/playlists", requireAuth, (req, res) => {
+    const u = req.session.user.username;
+    const data = loadUserPlaylists(u);
+    res.json(data);
 });
 
-app.post("/api/playlists", requireAuth, async (req, res) => {
-    const { name } = req.body;
-    if (!name) return res.status(400).json({ error: "Missing name" });
+app.post("/api/playlists", requireAuth, (req, res) => {
+    // create playlist
+    const u = req.session.user.username;
+    const name = String(req.body?.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Playlist name required" });
 
-    const username = req.session.user.username;
-    const pls = await readUserPlaylists(username);
+    const data = loadUserPlaylists(u);
+    if (data.playlists[name]) return res.status(409).json({ error: "Playlist already exists" });
 
-    const pl = { id: makeId("pl"), name, items: [], createdAt: new Date().toISOString() };
-    pls.push(pl);
-
-    await writeUserPlaylists(username, pls);
-    res.json({ playlist: pl });
+    data.playlists[name] = [];
+    saveUserPlaylists(u, data);
+    res.json({ ok: true, name });
 });
 
-app.delete("/api/playlists/:id", requireAuth, async (req, res) => {
-    const username = req.session.user.username;
-    let pls = await readUserPlaylists(username);
+app.delete("/api/playlists/:name", requireAuth, (req, res) => {
+    const u = req.session.user.username;
+    const name = req.params.name;
 
-    const before = pls.length;
-    pls = pls.filter(p => p.id !== req.params.id);
+    const data = loadUserPlaylists(u);
+    if (!data.playlists[name]) return res.status(404).json({ error: "Playlist not found" });
 
-    if (pls.length === before) return res.status(404).json({ error: "Playlist not found" });
-
-    await writeUserPlaylists(username, pls);
+    delete data.playlists[name];
+    saveUserPlaylists(u, data);
     res.json({ ok: true });
 });
 
-app.post("/api/playlists/:id/items", requireAuth, async (req, res) => {
-    const username = req.session.user.username;
-    const { item } = req.body; // youtube item object
-    if (!item || !item.videoId || !item.title) return res.status(400).json({ error: "Missing item data" });
+app.post("/api/playlists/:name/videos", requireAuth, (req, res) => {
+    // add a YouTube video object
+    const u = req.session.user.username;
+    const name = req.params.name;
 
-    const pls = await readUserPlaylists(username);
-    const pl = pls.find(p => p.id === req.params.id);
-    if (!pl) return res.status(404).json({ error: "Playlist not found" });
+    const video = req.body?.video;
+    if (!video || !video.videoId || !video.title) {
+        return res.status(400).json({ error: "Invalid video payload" });
+    }
 
-    // prevent duplicates across ALL playlists (same rule)
-    const already = pls.some(p => (p.items || []).some(it => it.type !== "mp3" && it.videoId === item.videoId));
-    if (already) return res.status(409).json({ error: "Video already exists in some playlist" });
+    const data = loadUserPlaylists(u);
+    if (!data.playlists[name]) return res.status(404).json({ error: "Playlist not found" });
 
-    pl.items = pl.items || [];
-    pl.items.push({
-        type: "youtube",
-        videoId: item.videoId,
-        title: item.title,
-        thumbnailUrl: item.thumbnailUrl || "",
-        duration: item.duration || "—",
-        views: item.views || "—",
-        rating: 0,
-        addedAt: new Date().toISOString()
+    // If video exists in ANY playlist -> reject (like requirement)
+    const all = Object.values(data.playlists).flat();
+    if (all.some(v => v.videoId === video.videoId && v.source !== "mp3")) {
+        return res.status(409).json({ error: "Video already exists in favorites" });
+    }
+
+    data.playlists[name].push({
+        ...video,
+        source: "youtube",
+        rating: typeof video.rating === "number" ? video.rating : 0
     });
 
-    await writeUserPlaylists(username, pls);
+    saveUserPlaylists(u, data);
     res.json({ ok: true });
 });
 
-app.delete("/api/playlists/:id/items/:itemId", requireAuth, async (req, res) => {
-    const username = req.session.user.username;
-    const pls = await readUserPlaylists(username);
-    const pl = pls.find(p => p.id === req.params.id);
-    if (!pl) return res.status(404).json({ error: "Playlist not found" });
+app.patch("/api/playlists/:name/videos/:videoId/rating", requireAuth, (req, res) => {
+    const u = req.session.user.username;
+    const name = req.params.name;
+    const videoId = req.params.videoId;
+    const rating = Number(req.body?.rating);
 
-    const before = (pl.items || []).length;
-    pl.items = (pl.items || []).filter(it => it.id !== req.params.itemId);
+    if (!Number.isFinite(rating) || rating < 0 || rating > 5) {
+        return res.status(400).json({ error: "Invalid rating" });
+    }
 
-    if (pl.items.length === before) return res.status(404).json({ error: "Item not found" });
+    const data = loadUserPlaylists(u);
+    const arr = data.playlists[name];
+    if (!arr) return res.status(404).json({ error: "Playlist not found" });
 
-    await writeUserPlaylists(username, pls);
+    const item = arr.find(v => v.videoId === videoId);
+    if (!item) return res.status(404).json({ error: "Video not found" });
+
+    item.rating = rating;
+    saveUserPlaylists(u, data);
     res.json({ ok: true });
 });
 
-app.patch("/api/playlists/:id/items/:itemId", requireAuth, async (req, res) => {
-    const username = req.session.user.username;
-    const { rating } = req.body;
+app.delete("/api/playlists/:name/videos/:videoId", requireAuth, (req, res) => {
+    const u = req.session.user.username;
+    const name = req.params.name;
+    const videoId = req.params.videoId;
 
-    const pls = await readUserPlaylists(username);
-    const pl = pls.find(p => p.id === req.params.id);
-    if (!pl) return res.status(404).json({ error: "Playlist not found" });
+    const data = loadUserPlaylists(u);
+    const arr = data.playlists[name];
+    if (!arr) return res.status(404).json({ error: "Playlist not found" });
 
-    const it = (pl.items || []).find(x => x.id === req.params.itemId);
-    if (!it) return res.status(404).json({ error: "Item not found" });
-
-    it.rating = Number(rating || 0);
-    await writeUserPlaylists(username, pls);
+    data.playlists[name] = arr.filter(v => v.videoId !== videoId);
+    saveUserPlaylists(u, data);
     res.json({ ok: true });
 });
 
-// ---------- Upload MP3 ----------
+// ---------- MP3 upload ----------
 const storage = multer.diskStorage({
-    destination: async (req, file, cb) => {
-        const username = req.session.user.username;
-        const dir = path.join(UPLOADS_DIR, username);
-        await fs.mkdir(dir, { recursive: true });
+    destination: (req, file, cb) => {
+        const u = req.session.user.username;
+        const dir = path.join(UPLOADS_DIR, normalizeUsername(u));
+        ensureDir(dir);
         cb(null, dir);
     },
     filename: (req, file, cb) => {
         // keep original name but make it safe-ish
-        const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const safe = file.originalname.replace(/[^\w.\- ]+/g, "_");
         cb(null, `${Date.now()}_${safe}`);
     }
 });
@@ -262,37 +270,43 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage,
     fileFilter: (req, file, cb) => {
+        // allow only mp3
         const ok = file.mimetype === "audio/mpeg" || file.originalname.toLowerCase().endsWith(".mp3");
-        cb(ok ? null : new Error("Only MP3 files allowed"), ok);
+        cb(ok ? null : new Error("Only MP3 files are allowed"), ok);
     },
-    limits: { fileSize: 25 * 1024 * 1024 } // 25MB
+    limits: { fileSize: 20 * 1024 * 1024 } // 20MB
 });
 
-app.post("/api/playlists/:id/upload", requireAuth, upload.single("file"), async (req, res) => {
-    const username = req.session.user.username;
-    const pls = await readUserPlaylists(username);
-    const pl = pls.find(p => p.id === req.params.id);
-    if (!pl) return res.status(404).json({ error: "Playlist not found" });
+app.post("/api/upload/mp3", requireAuth, upload.single("file"), (req, res) => {
+    const playlistName = String(req.body?.playlistName || "").trim();
+    if (!playlistName) return res.status(400).json({ error: "playlistName required" });
 
-    const fileUrl = `/uploads/${encodeURIComponent(username)}/${encodeURIComponent(req.file.filename)}`;
+    const u = req.session.user.username;
+    const data = loadUserPlaylists(u);
+    if (!data.playlists[playlistName]) return res.status(404).json({ error: "Playlist not found" });
 
-    pl.items = pl.items || [];
-    pl.items.push({
-        id: makeId("item"),
-        type: "mp3",
-        title: req.body.title || req.file.originalname,
-        fileUrl,
-        rating: 0,
-        addedAt: new Date().toISOString()
-    });
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
 
-    await writeUserPlaylists(username, pls);
-    res.json({ ok: true, fileUrl });
+    // add as playlist item
+    const item = {
+        videoId: `mp3_${file.filename}`, // unique id for deletion/rating
+        title: file.originalname,
+        thumbnail: "https://via.placeholder.com/480x360?text=MP3",
+        source: "mp3",
+        mp3Url: `/uploads/${normalizeUsername(u)}/${file.filename}`,
+        rating: 0
+    };
+
+    data.playlists[playlistName].push(item);
+    saveUserPlaylists(u, data);
+
+    res.json({ ok: true, item });
 });
 
-// ---------- Start ----------
-ensureDirs().then(() => {
-    app.listen(PORT, () => {
-        console.log(`Server running on http://localhost:${PORT}`);
-    });
+// ---------- Fallback to index for unknown routes? (optional) ----------
+// app.get("*", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
+
+app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
 });
